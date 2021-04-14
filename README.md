@@ -1,1 +1,2 @@
-# GENIE R code used for GENIE project
+# GENIE 
+R code used for GENIE project
