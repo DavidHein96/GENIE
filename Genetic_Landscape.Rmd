@@ -1,0 +1,1259 @@
+---
+title: "Genetic Landscape 2"
+author: "Dave Hein"
+date: "2/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+library(maftools)
+```
+
+
+# Loading in genie data
+```{r}
+
+#load in data
+patient_genie <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/data_clinical_patient_10.2-consortium.txt", comment.char="#")
+sample_genie <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/data_clinical_sample_10.2-consortium.txt", comment.char="#")
+maf_genie <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/data_mutations_extended_10.2-consortium.txt")
+#cna_genie <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/copynumberjusterbb2.txt")
+
+
+
+#filter to young adult COAD READ
+sample_genie2 <- sample_genie%>%filter((ONCOTREE_CODE=='COAD'|ONCOTREE_CODE=='READ'|ONCOTREE_CODE=='COADREAD')&AGE_AT_SEQ_REPORT<50)%>%filter(AGE_AT_SEQ_REPORT!="<18",AGE_AT_SEQ_REPORT!=">89")%>%filter(SEQ_ASSAY_ID %in% c('MSK-IMPACT468','MSK-IMPACT410','MSK-IMPACT341','DFCI-ONCOPANEL-1','DFCI-ONCOPANEL-2','DFCI-ONCOPANEL-3','VICC-01-T5A','VICC-01-T7','DFCI-ONCOPANEL-3.1'))
+
+
+
+
+#combine patient and sample data and add in tumor sample bar code for maf tools
+genie_clinical_filtered<- left_join(sample_genie2,patient_genie,by="PATIENT_ID")%>%mutate(Tumor_Sample_Barcode=SAMPLE_ID)%>%select(-SAMPLE_ID)
+
+
+#remove duplicates
+genie_clinical_filtered<- genie_clinical_filtered %>% distinct(genie_clinical_filtered$PATIENT_ID, .keep_all = TRUE)
+
+
+## REMOVE N/A or HEME###############################
+
+#only what we need
+genie_clinical_final<-genie_clinical_filtered%>%select(PATIENT_ID,AGE_AT_SEQ_REPORT,SAMPLE_TYPE,SEX,ETHNICITY,PRIMARY_RACE,SEQ_ASSAY_ID,CENTER,Tumor_Sample_Barcode,CANCER_TYPE_DETAILED)
+#remove heme
+genie_clinical_final<-genie_clinical_final%>%filter(SAMPLE_TYPE%in%c("Metastasis","Primary"))
+
+#prefiltered maf
+maf_genie2<- inner_join(maf_genie,genie_clinical_final,by='Tumor_Sample_Barcode')
+```
+
+
+
+
+
+## LOADING IN TEMPUS DATA ##
+```{r}
+#MAF
+colorectal_3_4_2021 <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/NewTEMPUSDATA/colorectal_3_4_2021.maf", comment.char="#")
+
+#CLIN and PAtient
+Clinical_Data_Patient_3_2_2021 <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/NewTEMPUSDATA/Clinical_Data_Patient_3_4_2021.txt")
+Clinical_Data_Sample_3_2_2021 <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/NewTEMPUSDATA/Clinical_Data_Sample_3_4_2021.txt")
+
+#remove duplicates
+tempus_sample <- Clinical_Data_Sample_3_2_2021 %>% distinct(Clinical_Data_Sample_3_2_2021$Primary_Ascen_ID, .keep_all = TRUE)
+
+#join sample and patient
+tempus_clinical<- full_join(Clinical_Data_Patient_3_2_2021,tempus_sample,by="Primary_Ascen_ID")
+
+#Remove anal and >50
+tempus_clinical2<-tempus_clinical%>%filter(Primary_Site%in%c("Colon","Rectal"),Age_at_Diag<50)
+
+
+#rename columns so they look like the genie columns
+tempus_clinical_renamed<-tempus_clinical2%>%rename(PATIENT_ID=Primary_Ascen_ID,AGE_AT_SEQ_REPORT=Age_at_Diag,CANCER_TYPE_DETAILED=Primary_Site,SEX=Sex,SAMPLE_TYPE_DETAILED=Tissue_Source,SAMPLE_TYPE=Sample_Type) %>%mutate(SEQ_ASSAY_ID="TEMPUS648",SAMPLE_ID=Tumor_Sample_Barcode) %>% select(-Samp_Tumor_Percent_Pre,-Vital_Stat,-Surv_Months,-Stage,-MSS) %>% mutate(PRIMARY_RACE=Race_Ethnicity,ETHNICITY=ifelse(str_detect(Race_Ethnicity,"Hispanic"),"Spanish/Hispanic","Non-Spanish/non-Hispanic"))%>%select(-Race_Ethnicity,-SAMPLE_TYPE_DETAILED)%>% mutate(CANCER_TYPE_DETAILED=paste(CANCER_TYPE_DETAILED,"Adenocarcinoma",sep=" "), SAMPLE_TYPE=ifelse(str_detect(SAMPLE_TYPE,"Mets"),"Metastasis","Primary"))
+
+#more cleaning
+tempus_clinical_renamed<-tempus_clinical_renamed%>% select(-`Clinical_Data_Sample_3_2_2021$Primary_Ascen_ID`,-Restage.MRI)
+tempus_clinical_final<-tempus_clinical_renamed%>%select(-SAMPLE_ID)%>%mutate(PRIMARY_RACE=ifelse(PRIMARY_RACE=="Hispanic","White",PRIMARY_RACE))
+tempus_clinical_final<-tempus_clinical_final%>%mutate(CENTER="UTSW")
+#make sure to run this line only once
+tempus_clinical_final<-tempus_clinical_final%>%mutate(Tumor_Sample_Barcode=paste(Tumor_Sample_Barcode,"_T",sep=""))%>%filter(Tumor_Sample_Barcode!='TL-20-56B318')
+
+#Preclean MAF
+maf_tempus2<- inner_join(colorectal_3_4_2021,tempus_clinical_final,by='Tumor_Sample_Barcode')
+```
+
+
+
+##Combine GENIE AND TEMPUS CLINICAL
+```{r}
+
+#combine them
+combined_clinical <- rbind(tempus_clinical_final,genie_clinical_final)
+
+#get rid of uknowns
+combined_clinical<-combined_clinical%>%filter(PRIMARY_RACE%in%c('Asian','Black','Hispanic','White'),ETHNICITY!='Unknown')
+
+#exclude non-white hipanics
+combined_clinical_newrace<-combined_clinical%>%filter(!(PRIMARY_RACE=='Asian'&ETHNICITY=='Spanish/Hispanic'),
+                                                      !(PRIMARY_RACE=='Black'&ETHNICITY=='Spanish/Hispanic')
+                                                      )
+#make new white hispanic race
+combined_clinical_newrace<-combined_clinical_newrace%>%mutate(NEWRACE=ifelse(PRIMARY_RACE=='White'&ETHNICITY=='Spanish/Hispanic','White Hispanic',PRIMARY_RACE))
+#%>%select(-PRIMARY_RACE,ETHNICITY)
+
+
+table(combined_clinical_newrace$SEQ_ASSAY_ID)
+```
+
+
+## GET THE GENIE MAF READY
+```{r}
+##GENIE
+
+#Remove other random people
+maf_genie3<-inner_join(maf_genie2,combined_clinical_newrace,by="Tumor_Sample_Barcode")
+
+#get what we need
+maf_genie3<- maf_genie3 %>%select(Tumor_Sample_Barcode,Hugo_Symbol,Variant_Classification,Variant_Type,Chromosome,Start_Position,End_Position,Reference_Allele,Tumor_Seq_Allele2,HGVSp_Short)
+
+#genes we want (NEVERMIND DO THIS LATER)
+#maf_genie4<-maf_genie3%>%filter(Hugo_Symbol%in%c('KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE'))
+
+```
+
+
+## GET THE TEMPUS MAF READY
+```{r}
+
+##TEMPUS
+#get samp tumor %
+tumspercent <- tempus_clinical%>%select(Tumor_Sample_Barcode,Samp_Tumor_Percent_Pre)%>%mutate(Tumor_Sample_Barcode=paste(Tumor_Sample_Barcode,"_T",sep=""))
+
+#add in samp tumor percent to utsw maf
+maf_tempus3<-inner_join(maf_tempus2,tumspercent,by='Tumor_Sample_Barcode')
+
+maf_tempus4 <- maf_tempus3 %>% mutate(VAF= (t_alt_count/t_depth)*100) %>% mutate(cutoff=ifelse(Samp_Tumor_Percent_Pre>35,Samp_Tumor_Percent_Pre/2 -10,5))%>%filter(VAF>cutoff) 
+
+#VAF in the normal as well to remove germline
+maf_tempus5 <- maf_tempus4 %>%filter(n_depth!='0')%>%
+                              mutate(n_alt_count=ifelse(n_alt_count=='.',1,as.numeric(n_alt_count)))%>%
+                               mutate(n_depth=ifelse(n_depth=='.',100,as.numeric(n_depth)))%>%
+                              mutate(VAFn= (n_alt_count/n_depth *100 ))%>%filter(VAFn<5) 
+
+
+#only need some variables
+maf_tempus6<- maf_tempus5 %>%select(Tumor_Sample_Barcode,Hugo_Symbol,Variant_Classification,Variant_Type,Chromosome,Start_Position,End_Position,Reference_Allele,Tumor_Seq_Allele2,HGVSp_Short)
+
+
+#Get only genes we want (NEVERMIND DO THIS LATER)
+#maf_tempus6 <- maf_tempus5 %>%filter(Hugo_Symbol%in%c('NRAS','KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE'))
+
+length(unique(maf_tempus2$Tumor_Sample_Barcode))
+
+length(unique(maf_tempus5$Tumor_Sample_Barcode))
+length(unique(maf_tempus6$Tumor_Sample_Barcode))
+
+maftest<-maf_tempus3%>% mutate(VAF= (t_alt_count/t_depth)*100) %>%mutate(n_alt_count=ifelse(n_alt_count=='.',1,as.numeric(n_alt_count)))%>%
+                               mutate(n_depth=ifelse(n_depth=='.',100,as.numeric(n_depth)))%>%mutate(VAFn= (n_alt_count/n_depth *100 ))%>%select(Tumor_Sample_Barcode,Hugo_Symbol,t_alt_count,t_depth,n_alt_count,n_depth,VAF,VAFn)%>%filter(Hugo_Symbol%in%c('MLH1','MSH6','PMS2','MSH2'))
+
+```
+
+
+#COMBINE MAFS
+```{r}
+#Combined maf
+combined_maf<-rbind(maf_tempus6,maf_genie3)
+
+#Now get rid of people in the clinical files that have no muations in the MAF
+pt_ids <- as.data.frame(unique(combined_maf$Tumor_Sample_Barcode)) %>% rename(Tumor_Sample_Barcode='unique(combined_maf$Tumor_Sample_Barcode)')
+
+FINAL_CLINICAL <- inner_join(combined_clinical_newrace,pt_ids,by='Tumor_Sample_Barcode')
+
+
+#make the official laml
+laml_full = read.maf(maf = combined_maf,clinicalData = FINAL_CLINICAL)
+oncoplot(maf = laml_full ,top=10)
+
+
+
+
+
+
+#make a test laml with only fun genes (this is just to look easily at them its not used more)
+combined_screenmaf<-combined_maf%>%filter(Hugo_Symbol%in%c('KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE','NTRK1','NTRK3','FBXW7','SOX9','NTRK2'))
+
+oncoplot(maf = laml_screen,genes = fun_genes)
+
+laml_screen = read.maf(maf = combined_screenmaf,clinicalData = combined_clinical_newrace)
+fab.ce = clinicalEnrichment(maf = laml_screen, clinicalFeature = 'NEWRACE')
+view(fab.ce$groupwise_comparision[p_value < 0.1])
+
+
+
+
+
+
+#What genes do we want?
+fun_genes <- c('NRAS','KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE','NTRK1','NTRK3','NTRK3')
+
+# MAKE A MUTATION MATRIX
+mutation_matrix<- as.data.frame(mutCountMatrix(
+laml_full,
+includeSyn = FALSE,
+countOnly = NULL,
+removeNonMutated = FALSE
+))
+
+mutation_matrix_t <- data.frame(t(mutation_matrix))
+mutation_matrix_new <- tibble::rownames_to_column(mutation_matrix_t, "Tumor_Sample_Barcode")
+
+mutation_matrix_genest1 <- mutation_matrix_new%>%select(all_of(fun_genes),Tumor_Sample_Barcode)
+
+mut_mate_2 <- inner_join(mutation_matrix_genest1,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+##add in copy number for ERBB2
+
+
+mut_mate_2<-mut_mate_2%>% mutate(KRAS=ifelse(KRAS==0,0,1),
+                                 BRAF=ifelse(BRAF==0,0,1),
+                                 NRAS=ifelse(NRAS==0,0,1),
+                                 NTRK1=ifelse(NTRK1==0,0,1),
+                                 NTRK3=ifelse(NTRK3==0,0,1),
+                                 NTRK2=ifelse(NTRK2==0,0,1),
+                                 MLH1=ifelse(MLH1==0,0,1),
+                                 PMS2=ifelse(PMS2==0,0,1),
+                                 MSH2=ifelse(MSH2==0,0,1),
+                                 MSH6=ifelse(MSH6==0,0,1),
+                                 
+                                 ERBB2=ifelse(ERBB2==0,0,1),
+                                 APC=ifelse(APC==0,0,1),
+                                 EPCAM=ifelse(EPCAM==0,0,1),
+                                 SMAD4=ifelse(SMAD4==0,0,1),
+                                 PIK3CA=ifelse(PIK3CA==0,0,1),
+                                 PTEN=ifelse(PTEN==0,0,1),
+                                 EGFR=ifelse(EGFR==0,0,1),
+                                 VEGFA=ifelse(VEGFA==0,0,1),
+                                 MYC=ifelse(MYC==0,0,1),
+                                 
+                                 CDH1=ifelse(CDH1==0,0,1),
+                                 TP53=ifelse(TP53==0,0,1),
+                                 BRCA1=ifelse(BRCA1==0,0,1),
+                                 BRCA2=ifelse(BRCA2==0,0,1),
+                                 MUTYH=ifelse(MUTYH==0,0,1),
+                                 POLE=ifelse(POLE==0,0,1)
+                                 )
+
+
+pms2check<-mut_mate_2%>%filter(PMS2==1,)
+
+
+top_ten_genes<- c("TP53","APC","KRAS","PIK3CA","FBXW7","SMAD4","TCF7L2","KMT2D","ARID1A","SOX9")
+
+```
+
+
+
+
+# Now we have the final mut mat, so lets look at some data!
+```{r}
+
+addmargins(table(mut_mate_2$NEWRACE,mut_mate_2$APC))
+
+table(mut_mate_2$SEQ_ASSAY_ID)
+
+
+
+#KRAS black non-hispanic v all
+kras <- rbind(
+  c(50,78),
+  c(926,698)
+  
+)
+
+#APC white v all
+apc <- rbind(
+  c(316,1066),
+  c(115,256)
+  
+)
+
+#PMS2 hisp v all 
+pms2 <- rbind(
+  c(98,7),
+  c(1621,26)
+  
+)
+
+
+#NTRK2 hisp v all 
+ntrk2 <- rbind(
+  c(98,7),
+  c(1614,33)
+  
+)
+
+
+fisher.test(kras)
+fisher.test(apc)
+fisher.test(pms2)
+fisher.test(ntrk2)
+
+summary(as.numeric(FINAL_CLINICAL$AGE_AT_SEQ_REPORT))
+
+table(FINAL_CLINICAL$SEQ_ASSAY_ID)
+
+table(mut_mate_2$NEWRACE,mut_mate_2$NTRK2)
+```
+
+
+
+# What genes in each thing?
+```{r}
+library(readr)
+genesforeachpanel <- read_delim("NewGeniedata2021/genesforeachpanel.txt", "\t", escape_double = FALSE, trim_ws = TRUE)
+
+fun_genes <- c('NRAS','KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE','NTRK1','NTRK3','NTRK2')
+
+cna_genes <- c("ERBB2","EGFR","MET","TYMS","SMAD4","SKI","STRAP","BRUNOL4","SMAD7","CD226")
+
+
+fun_genes %in% genesforeachpanel$`VICC-01-T7`
+cna_genes %in% genesforeachpanel$`VICC-01-T7`
+#gene 10
+
+fun_genes %in% genesforeachpanel$`VICC-01-T5A`
+cna_genes %in% genesforeachpanel$`VICC-01-T5A`
+#10, 22
+
+fun_genes %in% genesforeachpanel$`MSK-IMPACT468`
+cna_genes %in% genesforeachpanel$`MSK-IMPACT468`
+#all
+#TYMS
+
+fun_genes %in% genesforeachpanel$`MSK-IMPACT410`
+cna_genes %in% genesforeachpanel$`MSK-IMPACT410`
+#all
+#TYMS
+
+fun_genes %in% genesforeachpanel$`MSK-IMPACT341`
+cna_genes %in% genesforeachpanel$`MSK-IMPACT341`
+#gene 15
+#TYMS
+
+fun_genes %in% genesforeachpanel$`DFCI-ONCOPANEL-3`
+cna_genes %in% genesforeachpanel$`DFCI-ONCOPANEL-3`
+#all
+#TYMS
+
+fun_genes %in% genesforeachpanel$`DFCI-ONCOPANEL-3.1`
+cna_genes %in% genesforeachpanel$`DFCI-ONCOPANEL-3.1`
+#all
+#TYMS
+
+fun_genes %in% genesforeachpanel$`DFCI-ONCOPANEL-2`
+cna_genes %in% genesforeachpanel$`DFCI-ONCOPANEL-2`
+#10,15,22
+#TYMS
+
+fun_genes %in% genesforeachpanel$`DFCI-ONCOPANEL-1`
+cna_genes %in% genesforeachpanel$`DFCI-ONCOPANEL-1`
+#10,15,22
+#TYMS
+
+fun_genes %in% genesforeachpanel$TEMPUS648
+cna_genes %in% genesforeachpanel$TEMPUS648
+#all
+
+
+#10 is EPCAM
+#15 is VEGFA
+#22 is POLE
+```
+
+# COPY NUMBER
+```{r}
+#import genie CNA
+cna_genie <- read_csv("NewGeniedata2021/cna_10_transpose.txt",  skip = 1)
+
+cna_fun_genie<- cna_genie%>%select('NRAS','KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE','NTRK1','NTRK3','MET','SMAD4','Hugo_Symbol')%>%rename(Tumor_Sample_Barcode=Hugo_Symbol)
+
+cna_fun_genie<-inner_join(cna_fun_genie,pt_ids,by="Tumor_Sample_Barcode")
+
+
+#import and clean Tempus CNA
+cna_tempus <- read_delim("NewGeniedata2021/NewTEMPUSDATA/discreet.cna.txt", "\t", escape_double = FALSE, trim_ws = TRUE)
+cna_tempus2<-data.frame(t(cna_tempus))
+colnames(cna_tempus2) <- cna_tempus2[1,]
+cna_tempus2 <- cna_tempus2[-1, ] 
+cna_fun_tempus<- cna_tempus2%>%select('NRAS','KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE','NTRK1','NTRK3','MET','SMAD4','Hugo_Symbol')%>%rename(Tumor_Sample_Barcode=Hugo_Symbol)%>%mutate(Tumor_Sample_Barcode=paste(Tumor_Sample_Barcode,"_T",sep=""))
+
+cna_fun_tempus<-inner_join(cna_fun_tempus,pt_ids,by="Tumor_Sample_Barcode")
+
+#combine tempus and genie
+cna_combined<-rbind(cna_fun_genie,cna_fun_tempus)
+
+cna_combined_longer <- cna_combined%>%pivot_longer(cols=1:25, values_to = "CN",names_to="Gene")%>% filter(CN!=0)
+
+cna_combined_longer$CN[cna_combined_longer$CN>1]<-"Amp"
+cna_combined_longer$CN[cna_combined_longer$CN==-2]<-"DeepDel"
+cna_combined_longer$CN[cna_combined_longer$CN==-1]<-"Del"
+cna_combined_longer$CN[cna_combined_longer$CN==1]<-"ShallowAmp"
+
+cna_combined_longer <- cna_combined_longer %>% rename(Sample_name=Tumor_Sample_Barcode)
+
+
+cna_combined_longer <- cna_combined_longer %>%relocate(Gene)
+
+cna_combined_longer<-cna_combined_longer%>%mutate(CN=as.numeric(CN))
+
+
+
+################TEST
+
+cna_combined_longer2$CN[cna_combined_longer$CN>1]<-"Amp"
+cna_combined_longer2$CN[cna_combined_longer$CN==-2]<-"DeepDel"
+cna_combined_longer2$CN[cna_combined_longer$CN==-1]<-"Del"
+cna_combined_longer2$CN[cna_combined_longer$CN==1]<-"ShallowAmp"
+
+cna_combined_longer2 <- cna_combined_longer2 %>% rename(Sample_name=Tumor_Sample_Barcode)
+
+cna_combined_longer <- cna_combined_longer%>%filter(CN!=0,CN!=-1.5)
+cnas<-cna_combined_longer%>%filter(Gene%in%c("ERBB2","EGFR","MET","SMAD4"),CN=="Amp")%>%mutate(Tumor_Sample_Barcode=Sample_name)
+
+#########
+table(ERBB2$Gene)
+checkcna<- ERBB2%>%mutate(Tumor_Sample_Barcode=Sample_name)
+checkcna2<- full_join(checkcna,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+table(checkcna2$Gene,checkcna2$NEWRACE)
+#CHECK THE CNAs
+combined_screenmaf<-combined_maf%>%filter(Hugo_Symbol%in%c('KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE'))
+
+
+
+combined_screenmaf<-combined_screenmaf%>%mutate(Hugo_Symbol='none')
+
+laml_screen2 = read.maf(maf = combined_screenmaf,clinicalData = FINAL_CLINICAL, cnTable = ERBB2)
+fab.ce = clinicalEnrichment(maf = laml_screen2, clinicalFeature = 'NEWRACE')
+view(fab.ce$groupwise_comparision[p_value < 0.2])
+
+oncoplot(laml_screen2)
+
+ERBB2<-cna_combined_longer%>%filter(Gene%in%c("ERBB2","EGFR","MET","SMAD4"))
+
+cnas_for_table<-inner_join(cnas,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+table(cnas_for_table$Gene,cnas_for_table$NEWRACE)
+
+
+cnas_smad4<-cna_combined_longer%>%filter(Gene%in%c("SMAD4"),CN%in%c("Del","DeepDel"))%>%mutate(Tumor_Sample_Barcode=Sample_name)
+
+cnas_for_table_smad4<-inner_join(cnas_smad4,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+table(cnas_for_table_smad4$NEWRACE,cnas_for_table_smad4$Gene)
+
+```
+
+
+
+
+#FIGS
+```{r}
+#FINAL_CLINICAL
+
+clinical<-FINAL_CLINICAL%>%group_by(CENTER,NEWRACE)%>%summarize(count = n())
+
+
+clinical$NEWRACE[clinical$NEWRACE=="White"]<-"Non-Hispanic White"
+clinical$NEWRACE[clinical$NEWRACE=="Black"]<-"Non-Hispanic Black"
+clinical$NEWRACE[clinical$NEWRACE=="Asian"]<-"Non-Hispanic Asian"
+clinical$NEWRACE[clinical$NEWRACE=="Hispanic"]<-"White Hispanic"
+
+#absolute
+ggplot(clinical, aes(fill=NEWRACE,y=count, x=CENTER)) + 
+    geom_bar(position="stack", stat="identity")+
+  scale_fill_manual(values=c("Non-Hispanic Black"="#1763A6","Non-Hispanic White"="#1C592B","Non-Hispanic Asian"="#A561A7","White Hispanic"="#4CA649"))+ theme_test() + xlab("Center")+ylab("Number of Patients")+labs(fill="Race/Ethnicity")+ggtitle("Total Number of Patients by Testing Center\nFor Young Adult CRC")+theme(text = element_text(size = 14)) 
+
+#proportional
+ggplot(clinical, aes(fill=NEWRACE,y=count, x=CENTER)) + 
+    geom_bar(position="fill", stat="identity")+
+    scale_fill_manual(values=c("Non-Hispanic Black"="#1763A6","Non-Hispanic White"="#1C592B","Non-Hispanic Asian"="#A561A7","White Hispanic"="#4CA649"))+ theme_test()+xlab("Center")+ylab("Proportion of Patients")+labs(fill="Race/Ethnicity")+ggtitle("Racial/Ethnic Makeup of Patients by Testing Center \nFor Young Adult CRC")+theme(text = element_text(size = 14)) 
+
+
+##SEER GRAPHS##
+
+#SEER YOUNG and RACE
+seer_race <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/SEER_DATA/seer_race_withci_long.txt")
+
+seer_race2<-seer_race%>%filter(New.age==0,Year.of.diagnosis!=0)%>%mutate(Year.of.diagnosis=Year.of.diagnosis+1991)
+
+seer_race2$Race.and.origin.sepcial_race[seer_race2$Race.and.origin.sepcial_race==0]<-"Non-Hispanic White"
+seer_race2$Race.and.origin.sepcial_race[seer_race2$Race.and.origin.sepcial_race==1]<-"Non-Hispanic Black"
+seer_race2$Race.and.origin.sepcial_race[seer_race2$Race.and.origin.sepcial_race==2]<-"Non-Hispanic Asian"
+seer_race2$Race.and.origin.sepcial_race[seer_race2$Race.and.origin.sepcial_race==3]<-"All Hispanic"
+
+seer_race3<-seer_race2%>%mutate(Race.and.origin.sepcial_race=as.factor(Race.and.origin.sepcial_race))
+
+seer_race3$Race.and.origin.sepcial_race<-factor(seer_race2$Race.and.origin.sepcial_race,levels = c("Non-Hispanic Black","Non-Hispanic White","Non-Hispanic Asian","All Hispanic"))
+
+ggplot(seer_race3)+geom_point(aes(x=Year.of.diagnosis,y=Age.Adjusted.Rate,color=Race.and.origin.sepcial_race),alpha=0.3)+
+                    theme(legend.position="bottom")+ylim(c(0,10))+
+                    geom_smooth(method = "lm",se=FALSE,aes(x=Year.of.diagnosis,y=Age.Adjusted.Rate,color=Race.and.origin.sepcial_race),size=1.5)+
+                    scale_color_manual(values=c("Non-Hispanic Black"="#1763A6","Non-Hispanic White"="#1C592B","Non-Hispanic Asian"="#A561A7","All Hispanic"="#4CA649"))+ theme_test() +ylab("Age Adjusted Rate per 100,000")+ xlab("Year of Diagnosis")+ggtitle("Rates of CRC Diagnosis in Young Adults (<50) \nFrom 1992-2017 by Race/Ethnicity")+ labs(color="Race/Ethnicty")+scale_x_continuous(breaks=c(1992,1996,2000,2004,2008,2012,2016))+theme(text = element_text(size = 14)) 
+
+
+                    
+
+
+
+
+#SEER OLD V YOUNG NO RACE
+library(ggforce)
+see_no_race_long <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/SEER_DATA/see_no_race_long.txt")
+
+seer_oldvyoung <- see_no_race_long %>%filter(Year.of.diagnosis!=0)%>%mutate(Year.of.diagnosis=Year.of.diagnosis+1991)
+
+seer_oldvyoung$New.age[seer_oldvyoung$New.age==0]<-"Young Adults (<50)"
+seer_oldvyoung$New.age[seer_oldvyoung$New.age==1]<-"Older Adults (50+)"
+
+ggplot(seer_oldvyoung)+ geom_point(aes(x=Year.of.diagnosis,y=Age.Adjusted.Rate,color=New.age))+
+                        facet_zoom(ylim = c(0,10),zoom.size = .5)+theme_test()+ylab("Age Adjusted Rate per 100,000")+ 
+                        xlab("Year of Diagnosis")+labs(color="Age Group")+
+                        ggtitle("Rates of CRC Diagnosis in Young Adults (<50) and \nOlder Adults (50+) 1992-2017")+
+                        scale_x_continuous(breaks=c(1992,2004,2016))+
+                        theme(text = element_text(size = 14)) 
+  
+   # theme(legend.text=element_text(size=12),legend.title=element_text(size=12),text = element_text(size=12),
+                        #      axis.text.x = element_text(size=12),
+                         #     axis.text.y = element_text(size=12),
+                          #    axis.title = element_text(size=12))
+
+
+ggsave(plot=last_plot(),filename ="totaltestingcenter.png",height = 4, width = 7 )
+ggsave(plot=last_plot(),filename ="makeuptestingcenter.png",height = 4, width = 7 )
+ggsave(plot=last_plot(),filename ="youngovertimer.png",height = 4, width = 7 )
+ggsave(plot=last_plot(),filename ="youngvold.png",height = 4, width = 7 )
+```
+
+
+#Combined MMR mutations
+```{r}
+#mutations in MLH1 MSH2 MSH6 PMS2
+
+mut_mate_mmr <- mut_mate_2%>%mutate(mmr=MLH1+MSH2+MSH6+PMS2)
+
+addmargins(table(mut_mate_mmr$mmr,mut_mate_mmr$NEWRACE))
+table(mut_mate_2$CENTER,mut_mate_2$NEWRACE)
+
+table(mut_mate_2$NEWRACE,mut_mate_2$BRCA2)
+#are hispanics enriched in any MMRs
+any_mmr <- rbind(
+  c(18,87),
+  c(137,1474)
+  
+)
+
+fisher.test(any_mmr)
+
+
+#for people with MMR mutations, do hispanics tend to have more than 1?
+multi_mmr <- rbind(
+  c(8,10),
+  c(122,51)
+  
+)
+
+
+fisher.test(multi_mmr)
+
+
+#out of everyone, do hispancs have more people with 2+ mmr
+only2plus <- rbind(
+  c(10,95),
+  c(51,1596)
+  
+)
+
+
+fisher.test(only2plus)
+
+
+
+
+#with braf and braca1 and 2 
+
+mut_mate_mmr2 <- mut_mate_2%>%mutate(mmr=MLH1+MSH2+MSH6+PMS2+BRCA1+BRCA2)
+table(mut_mate_mmr2$mmr,mut_mate_mmr2$NEWRACE)
+
+
+#are hispanics enriched in any MMRs with BRCA1 and Brc1a2
+any_mmr2 <- rbind(
+  c(26,79),
+  c(259,1388)
+  
+)
+
+fisher.test(any_mmr2)
+
+#for people with MMR mutations, do hispanics tend to have more than 1? Plus BRCA1 and 2
+multi_mmr2 <- rbind(
+  c(10,12),
+  c(138,66)
+  
+)
+
+fisher.test(multi_mmr2)
+
+#out of everyone, do hispancs have more people with 2+ mmr including braca1 and 2
+only2plus2 <- rbind(
+  c(12,93),
+  c(66,1581)
+  
+)
+fisher.test(only2plus2)
+```
+
+
+
+# Look at number of mutations
+```{r}
+
+#mutation_matrix_genest1 
+
+
+
+
+inter<-(Reduce(intersect, list(genesforeachpanel$`VICC-01-T5A`,genesforeachpanel$`MSK-IMPACT468`,genesforeachpanel$`MSK-IMPACT410`,genesforeachpanel$`MSK-IMPACT341`,genesforeachpanel$`DFCI-ONCOPANEL-3`,genesforeachpanel$`DFCI-ONCOPANEL-3.1`,genesforeachpanel$`DFCI-ONCOPANEL-3`,genesforeachpanel$`DFCI-ONCOPANEL-2`,genesforeachpanel$`DFCI-ONCOPANEL-1`,genesforeachpanel$TEMPUS648)))
+
+genes_in_common<-as.data.frame(inter)
+genes_in_common<-genes_in_common%>%filter(inter!="NKX2-1",inter!="MEF2B")
+
+fun_genes <- c('NRAS','KRAS','BRAF','MLH1','PMS2','MSH2','MSH6','ERBB2','APC','EPCAM','SMAD4','PIK3CA','PTEN','EGFR', 'VEGFA' ,'MYC','CDH1', 'TP53', 'BRCA1' ,'BRCA2', 'MUTYH' ,'POLE','NTRK1','NTRK2','NTRK3')
+
+# MAKE A MUTATION MATRIX
+mutation_matrix_counts<- as.data.frame(mutCountMatrix(
+laml_full,
+includeSyn = FALSE,
+countOnly = NULL,
+removeNonMutated = FALSE
+))
+
+mutation_matrix_t2 <- data.frame(t(mutation_matrix_counts))
+mutation_matrix_new2 <- tibble::rownames_to_column(mutation_matrix_t2, "Tumor_Sample_Barcode")
+
+mutation_matrix_genes_full <- mutation_matrix_new2%>%select(all_of(genes_in_common$inter),Tumor_Sample_Barcode)
+
+mut_mate_fullcoutns <- inner_join(mutation_matrix_genes_full,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+mut_mate_fullcoutns<- mut_mate_fullcoutns%>%rowwise()%>%mutate(total_mut=sum(c_across("BCL6":"CDKN2B")),total_mmr=sum(c_across(c("MLH1","MSH6","PMS2","MSH2"))))
+
+##### THIS LINE PRODUCES MEAN AND SD ####
+mut_mate_fullcoutns%>%group_by(NEWRACE)%>%summarize(mean_muts=mean(total_mut),sd_muts=sd(total_mut),n=n())
+
+
+##histogram
+
+ggplot(mut_mate_fullcoutns,aes(x=total_mut))+geom_histogram(binwidth = 1)+xlim(0,50)+geom_density(alpha=.2, fill="#FF6666") 
+
+mut_mate_fullcoutns$
+
+
+#### DOUBLE HIT MMR ###
+mut_mate_fullcoutns_mmr<-mut_mate_fullcoutns%>%mutate(multimmr=ifelse(MSH2>1|MSH6>1|MLH1>1|PMS2>1,"multi","no multi"))%>%select(MLH1,MSH6,PMS2,MSH2,PATIENT_ID,NEWRACE,CENTER,SEQ_ASSAY_ID,multimmr)
+
+addmargins(table(mut_mate_fullcoutns_mmr$NEWRACE,mut_mate_fullcoutns_mmr$multimmr))
+
+
+multihits <- rbind(
+  c(6,99),
+  c(47,1600)
+  
+)
+fisher.test(multihits)
+
+```
+
+#KRAS genes
+```{r}
+
+kraslist<-kras_list2%>%select(HGVSp_Short)
+
+
+combined_maf<-rbind(maf_tempus6,maf_genie3)
+
+combined_maf_kras<-combined_maf%>%filter(Hugo_Symbol=="KRAS"&HGVSp_Short%in%kraslist$HGVSp_Short)
+
+
+mut_mate_kras <- inner_join(mutation_matrix_genes_kras,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+combined_maf_kras2<- combined_maf_kras%>%distinct(Tumor_Sample_Barcode,.keep_all = TRUE)
+
+kras_data<-left_join(FINAL_CLINICAL,combined_maf_kras2,by="Tumor_Sample_Barcode")
+kras_data2<-kras_data%>%mutate(Hugo=ifelse(is.NA(Hugo_Symbol),"none","KRAS"))
+
+addmargins(table(kras_data$NEWRACE,kras_data$Hugo_Symbol))
+
+
+multihits <- rbind(
+  c(6,99),
+  c(47,1600)
+  
+)
+fisher.test(multihits)
+
+
+
+
+
+
+```
+
+
+
+#Annotating the mutations
+```{r}
+
+gnames <- c('KRAS','NRAS','BRAF','APC','TP53','MLH1','PMS2','MSH6','MSH2','BRCA1','BRCA2','EGFR','SMAD4','ERBB2','PIK3CA','PTEN','MYC','CDH1','MUTYH','NTRK1','NTRK2','NTRK3')
+
+
+overall<-data.frame(gene=character(),
+                         variant=character(),effect=character())
+
+for (i in 1:length(gnames)) {
+df <- read.delim(paste0("C:/Users/Dave Work/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/OKOKB_GENE_LIST/gene_annots_",tolower(gnames[i]),".txt"),sep='\t',header=FALSE)
+  
+genetest<-df%>%mutate(variant="",effect="",gene="")
+
+n=1
+
+while(n < nrow(genetest)){
+  genetest$variant[n]=genetest$V1[n]
+  genetest$effect[n]=genetest$V1[n+1]
+  n=n+4
+}
+newgenetest2<- genetest%>%mutate(gene=gnames[i])
+newgenetest2<- newgenetest2%>%select(gene,effect,variant)%>%filter(effect!="")
+
+overall<-rbind(newgenetest2,overall)
+}
+
+
+table(overall$gene)
+
+
+library(stringr)
+overall2<-overall%>%filter(!str_detect(variant,"Fusion"),!str_detect(variant,"Amplification"),!str_detect(variant,"duplication"),!str_detect(variant,"Deletion"),!str_detect(variant,"domain"),!str_detect(variant,"deletion"),!str_detect(variant,"insertion"),!str_detect(variant,"Duplication"))
+
+
+
+onco_variants<-overall2%>%mutate(HGVSp_Short = paste0("p.",variant)) %>% mutate(gene_variant=paste0(gene,"_",HGVSp_Short)) %>% mutate(gene_variant=ifelse(str_detect(gene_variant,"Trunc"),paste0(gene,"_","*"),gene_variant))
+
+```
+
+
+
+
+
+```{r}
+
+
+
+
+# stage at diag
+
+library(stringr)
+
+colon2<-coloncases%>%mutate(age=as.numeric(str_sub(Age.recode.with.single.ages.and.85.,1,2)))%>%rename(stage=SEER.historic.stage.A..1973.2015.)%>%mutate(oldoryoung=ifelse(age<49,"Younger Adults (<50)","Older Adults (50+)"))
+
+colonsum<-colon2%>%group_by(oldoryoung,stage)%>%summarize(totals=n())
+
+colonsum<-colonsum%>%mutate(stage=ifelse(stage=="Blank(s)","Unknown",stage))%>%mutate(percents=ifelse(oldoryoung=="Older Adults (50+)",totals/356306,totals/45252))%>%filter(stage!="Unknown",stage!="Unstaged")
+
+
+colsumsfin<-colonsum%>%mutate(pers=round(percents*100,1))
+
+coloncases$SEER.historic.stage.A..1973.2015.
+
+
+seer_race3$Race.and.origin.sepcial_race<-factor(seer_race2$Race.and.origin.sepcial_race,levels = c("Non-Hispanic Black","Non-Hispanic White","Non-Hispanic Asian","All Hispanic"))
+
+colsumsfin$stage<-factor(colsumsfin$stage,levels=c("Localized","Regional","Distant"))
+
+ggplot(colsumsfin)+geom_bar(aes(x=stage,y=pers,fill=oldoryoung),position = "dodge",stat="identity",width = 0.7)+theme_test()+xlab("Stage at Diagnosis")+ylab("Percentage of Patients")+labs(fill="Age Group")+ggtitle("Percentage of Stage at Diagnosis for Young Adults (<50) and \nOlder Adults (50+) from 2000-2017")+theme(text = element_text(size = 14)) + ylim(0,50)
+
+ggsave(plot=last_plot(),filename ="youngvoldSTAGE.png",height = 4, width = 7 )
+```
+
+
+
+
+### COOL PLOT ###
+```{r}
+#Using mut_mate_2
+
+mut_mate_2_summ_new <- mut_mate_2%>%group_by(NEWRACE)%>%summarise(KRAS=sum(KRAS),
+                                                                  NRAS=sum(NRAS),
+                                                                  BRAF=sum(BRAF),
+                                                                  APC=sum(APC),
+                                                                  TP53=sum(TP53),
+                                                                  MLH1=sum(MLH1),
+                                                                  PMS2=sum(PMS2),
+                                                                  MSH2=sum(MSH2),
+                                                                  MSH6=sum(MSH6),
+                                                                  BRCA1=sum(BRCA1),
+                                                                  BRCA2=sum(BRCA2),
+                                                                  EGFR=sum(EGFR),
+                                                                  SMAD4=sum(SMAD4),
+                                                                  ERBB2=sum(ERBB2),
+                                                                  PIK3CA=sum(PIK3CA),
+                                                                  PTEN=sum(PTEN),
+                                                                  MYC=sum(MYC),
+                                                                  CDH1=sum(CDH1),
+                                                                  MUTYH=sum(MUTYH),
+                                                                  NTRK1=sum(NTRK1),
+                                                                  NTRK2=sum(NTRK2),
+                                                                  NTRK3=sum(NTRK3))
+
+summ_tidy<- pivot_longer(mut_mate_2_summ_new,cols = c(KRAS,NRAS,BRAF,APC,TP53,MLH1,PMS2,MSH6,MSH2,BRCA1,BRCA2,EGFR,SMAD4,ERBB2,PIK3CA,PTEN,MYC,CDH1,MUTYH,NTRK1,NTRK2,NTRK3),names_to = "Gene",values_to = "count")
+  
+
+summ_tidy$total<-0
+summ_tidy$total[summ_tidy$NEWRACE=="Asian"]<-137
+summ_tidy$total[summ_tidy$NEWRACE=="Black"]<-128
+summ_tidy$total[summ_tidy$NEWRACE=="White Hispanic"]<-105
+summ_tidy$total[summ_tidy$NEWRACE=="White"]<-1382
+
+summ_tidy_2<-summ_tidy%>%mutate(prop=round(count/total,digits=3)*100)
+summ_tidy_3<-summ_tidy_2%>%group_by(Gene)%>%mutate(rank=as.factor(min_rank(prop)) )
+
+ggplot(data=summ_tidy_3,aes(x=NEWRACE,y=Gene,fill=(rank)))+geom_tile(color="White",size=1)+geom_text(aes(NEWRACE, Gene, label = prop), color = "black", size = 4)+theme_test()+ scale_fill_manual(values=c("1"="#c6dbef","2"="#9ecae1","3"="#6baed6","4"="#4292c6"))+
+  theme(legend.position = "none",axis.title.y = element_blank()) +xlab("Race/Ethnicity") + 
+  scale_x_discrete(labels=c("Asian"="Non-Hispanic\nAsian","Black"="Non-Hispanic\nBlack","White"="Non-Hispanic\nWhite","White Hispanic"="White\nHispanic"))
+
+
+
+
+ggsave(plot=last_plot(),filename="test.png",height=8,width=4)
+
+
+```
+
+
+
+### COOL PLOT 2 ###
+```{r,fig.width=6,fig.height=12}
+
+oncovariant_maf <- combined_maf %>% filter(Hugo_Symbol%in%gnames)
+
+oncovariant_maf<-oncovariant_maf%>%mutate(gene_variant=paste0(Hugo_Symbol,"_",HGVSp_Short)) %>% mutate(gene_variant=ifelse(str_detect(gene_variant,"\\*$"),paste0(Hugo_Symbol,"_","*"),gene_variant))
+
+
+oncovariant_maf2<-inner_join(oncovariant_maf,onco_variants,by="gene_variant")
+
+
+oncovariant_maf2<-oncovariant_maf2%>%filter(effect%in%c("Likely Oncogenic","Oncogenic"))
+
+
+laml_oncogenic = read.maf(maf = oncovariant_maf2,clinicalData = FINAL_CLINICAL)
+oncoplot(maf = laml_full ,genes = fun_genes)
+
+
+
+gnames2 <- c('KRAS','NRAS','BRAF','APC','TP53','MLH1','PMS2','MSH6','MSH2','BRCA1','BRCA2','EGFR','SMAD4','ERBB2','PIK3CA','PTEN','CDH1','MUTYH')
+
+# MAKE A MUTATION MATRIX
+mutation_matrix_onc<- as.data.frame(mutCountMatrix(
+laml_oncogenic,
+includeSyn = FALSE,
+countOnly = NULL,
+removeNonMutated = FALSE
+))
+
+mutation_matrix_onc_t <- data.frame(t(mutation_matrix_onc))
+mutation_matrix_onc_new <- tibble::rownames_to_column(mutation_matrix_onc_t, "Tumor_Sample_Barcode")
+
+mutation_matrix_onc_genest1 <- mutation_matrix_onc_new%>%select(all_of(gnames2),Tumor_Sample_Barcode)
+
+mut_mate_onc <- full_join(mutation_matrix_onc_genest1,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+##add in copy number for ERBB2
+
+
+mut_mate_onc<-mut_mate_onc%>% mutate(KRAS=ifelse(KRAS==0,0,1),
+                                 BRAF=ifelse(BRAF==0,0,1),
+                                 NRAS=ifelse(NRAS==0,0,1),
+                              
+                                 MLH1=ifelse(MLH1==0,0,1),
+                                 PMS2=ifelse(PMS2==0,0,1),
+                                 MSH2=ifelse(MSH2==0,0,1),
+                                 MSH6=ifelse(MSH6==0,0,1),
+                                 
+                                 ERBB2=ifelse(ERBB2==0,0,1),
+                                 APC=ifelse(APC==0,0,1),
+                                 
+                                 SMAD4=ifelse(SMAD4==0,0,1),
+                                 PIK3CA=ifelse(PIK3CA==0,0,1),
+                                 PTEN=ifelse(PTEN==0,0,1),
+                                 EGFR=ifelse(EGFR==0,0,1),
+                                 
+                                
+                                 
+                                 CDH1=ifelse(CDH1==0,0,1),
+                                 TP53=ifelse(TP53==0,0,1),
+                                 BRCA1=ifelse(BRCA1==0,0,1),
+                                 BRCA2=ifelse(BRCA2==0,0,1),
+                                 MUTYH=ifelse(MUTYH==0,0,1),
+                                 
+                                 )
+
+
+addmargins(table(mut_mate_onc$KRAS))
+
+
+mut_mate_onc<-mut_mate_onc%>%replace(is.na(.),0)
+
+table(mut_mate_onc$NEWRACE,mut_mate_onc$KRAS)
+
+
+
+mut_mate_onc_summ <- mut_mate_onc%>%group_by(NEWRACE)%>%summarise(KRAS=sum(KRAS),
+                                                                  NRAS=sum(NRAS),
+                                                                  BRAF=sum(BRAF),
+                                                                  APC=sum(APC),
+                                                                  TP53=sum(TP53),
+                                                                  MLH1=sum(MLH1),
+                                                                  PMS2=sum(PMS2),
+                                                                  MSH2=sum(MSH2),
+                                                                  MSH6=sum(MSH6),
+                                                                  BRCA1=sum(BRCA1),
+                                                                  BRCA2=sum(BRCA2),
+                                                                  EGFR=sum(EGFR),
+                                                                  SMAD4=sum(SMAD4),
+                                                                  ERBB2=sum(ERBB2),
+                                                                  PIK3CA=sum(PIK3CA),
+                                                                  PTEN=sum(PTEN),
+                                                                  
+                                                                  CDH1=sum(CDH1),
+                                                                  MUTYH=sum(MUTYH))
+
+summ_tidy_onc<- pivot_longer(mut_mate_onc_summ,cols = c(KRAS,NRAS,BRAF,APC,TP53,MLH1,PMS2,MSH6,MSH2,BRCA1,BRCA2,EGFR,SMAD4,ERBB2,PIK3CA,PTEN,CDH1,MUTYH),names_to = "Gene",values_to = "count")
+  
+
+summ_tidy_onc$total<-0
+summ_tidy_onc$total[summ_tidy_onc$NEWRACE=="Asian"]<-137
+summ_tidy_onc$total[summ_tidy_onc$NEWRACE=="Black"]<-128
+summ_tidy_onc$total[summ_tidy_onc$NEWRACE=="White Hispanic"]<-105
+summ_tidy_onc$total[summ_tidy_onc$NEWRACE=="White"]<-1382
+
+summ_tidy_onc<-summ_tidy_onc%>%mutate(prop=round(count/total,digits=3)*100)
+summ_tidy_onc_2<-summ_tidy_onc%>%group_by(Gene)%>%mutate(rank=as.factor(min_rank(prop)) )
+
+
+
+ggplot(data=summ_tidy_3,aes(x=NEWRACE,y=Gene,fill=(rank)))+geom_tile(color="White",size=1)+geom_text(aes(NEWRACE, Gene, label = prop), color = "black", size = 4)+theme_test()+ scale_fill_manual(values=c("1"="#c6dbef","2"="#9ecae1","3"="#6baed6","4"="#4292c6"))+
+  theme(legend.position = "none",axis.title.y = element_blank()) +xlab("Race/Ethnicity") + 
+  scale_x_discrete(labels=c("Asian"="Non-Hispanic\nAsian","Black"="Non-Hispanic\nBlack","White"="Non-Hispanic\nWhite","White Hispanic"="White\nHispanic"))
+
+
+
+
+onc_join<-summ_tidy_onc%>%select(NEWRACE,Gene,prop)%>%mutate(gene_race=paste0(Gene,"_",NEWRACE))%>%rename(prop_onc=prop)
+all_join<-summ_tidy_3%>%select(NEWRACE,Gene,prop)%>%mutate(gene_race=paste0(Gene,"_",NEWRACE))%>%rename(prop_all=prop)
+
+
+sum_joined <- full_join(onc_join,all_join,by="gene_race")
+
+sum_joined<-sum_joined%>%mutate(prop_onc= ifelse(is.na(prop_onc),0,prop_onc))
+
+ggplot(summ_tidy_onc_2)+geom_bar(aes(x=NEWRACE,y=prop),stat='identity')+facet_wrap(~Gene, scales = "free_y",ncol = 2)
+
+ggplot(sum_joined)+geom_bar(aes(x=NEWRACE.y,y=prop_all),stat='identity')+geom_bar(aes(x=NEWRACE.y,y=prop_onc),stat = "identity",fill="#2171b5")+facet_wrap(~Gene.y, scales = "free_y",ncol = 2)
+
+ggsave(plot=last_plot(),filename="test2.png",height=12,width=6)
+```
+
+
+
+
+# Cool plot 3
+```{r,width=3,fig.height=8}
+
+
+########################## TOP TEN ONCOGENEIC #####################################
+top_ten_genes<- c("TP53","APC","KRAS","PIK3CA","FBXW7","SMAD4","TCF7L2","KMT2D","ARID1A","SOX9")
+
+overall_top<-data.frame(gene=character(),
+                         variant=character(),effect=character())
+
+for (i in 1:length(top_ten_genes)) {
+df <- read.delim(paste0("C:/Users/s197002/OneDrive - University of Texas Southwestern/GENIEandGenetics/NewGeniedata2021/OKOKB_GENE_LIST/gene_annots_",tolower(top_ten_genes[i]),".txt"),sep='\t',header=FALSE)
+  
+genetest<-df%>%mutate(variant="",effect="",gene="")
+
+n=1
+
+while(n < nrow(genetest)){
+  genetest$variant[n]=genetest$V1[n]
+  genetest$effect[n]=genetest$V1[n+1]
+  n=n+4
+}
+newgenetest2<- genetest%>%mutate(gene=top_ten_genes[i])
+newgenetest2<- newgenetest2%>%select(gene,effect,variant)%>%filter(effect!="")
+
+overall_top<-rbind(newgenetest2,overall_top)
+}
+
+
+
+
+
+library(stringr)
+overall_top_2<-overall_top%>%filter(!str_detect(variant,"Fusion"),!str_detect(variant,"Amplification"),!str_detect(variant,"duplication"),!str_detect(variant,"Deletion"),!str_detect(variant,"domain"),!str_detect(variant,"deletion"),!str_detect(variant,"insertion"),!str_detect(variant,"Duplication"))
+
+
+
+onco_variants_top10<-overall_top_2%>%mutate(HGVSp_Short = paste0("p.",variant)) %>% mutate(gene_variant=paste0(gene,"_",HGVSp_Short)) %>% mutate(gene_variant=ifelse(str_detect(gene_variant,"Trunc"),paste0(gene,"_","*"),gene_variant))%>%filter(effect%in%c("Likely Oncogenic","Oncogenic"))
+
+
+
+
+
+onco_top_maf <- combined_maf %>% filter(Hugo_Symbol%in%top_ten_genes)
+
+onco_top_maf<-onco_top_maf%>%mutate(gene_variant=paste0(Hugo_Symbol,"_",HGVSp_Short)) %>% mutate(gene_variant=ifelse(str_detect(gene_variant,"\\*$"),paste0(Hugo_Symbol,"_","*"),gene_variant))
+
+
+onco_top_maf2<-inner_join(onco_top_maf,onco_variants_top10,by="gene_variant")
+
+
+#oncovariant_maf2<-oncovariant_maf2%>%filter(effect%in%c("Likely Oncogenic","Oncogenic"))
+
+
+laml_top = read.maf(maf = onco_top_maf2,clinicalData = FINAL_CLINICAL)
+#oncoplot(maf = laml_full ,genes = fun_genes)
+
+
+
+
+# MAKE A MUTATION MATRIX
+mutation_matrix_top<- as.data.frame(mutCountMatrix(
+laml_top,
+includeSyn = FALSE,
+countOnly = NULL,
+removeNonMutated = FALSE
+))
+
+mutation_matrix_top_t <- data.frame(t(mutation_matrix_top))
+mutation_matrix_top_new <- tibble::rownames_to_column(mutation_matrix_top_t, "Tumor_Sample_Barcode")
+
+mutation_matrix_top_genest1 <- mutation_matrix_top_new%>%select(all_of(top_ten_genes),Tumor_Sample_Barcode)
+
+mut_mate_top <- full_join(mutation_matrix_top_genest1,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+##add in copy number for ERBB2
+
+top_ten_genes<- c("TP53","APC","KRAS","PIK3CA","FBXW7","SMAD4","TCF7L2","KMT2D","ARID1A","SOX9")
+
+mut_mate_top<-mut_mate_top%>% mutate(
+                                 KRAS=ifelse(KRAS==0,0,1),
+                                 
+                                 APC=ifelse(APC==0,0,1),
+                                 
+                                 SMAD4=ifelse(SMAD4==0,0,1),
+                                 PIK3CA=ifelse(PIK3CA==0,0,1),
+                                 
+                                 TP53=ifelse(TP53==0,0,1),
+                                 SOX9=ifelse(SOX9==0,0,1),
+                                 TCF7L2=ifelse(TCF7L2==0,0,1),
+                                 KMT2D=ifelse(KMT2D==0,0,1),
+                                 ARID1A=ifelse(ARID1A==0,0,1),
+                                 FBXW7=ifelse(FBXW7==0,0,1),
+                                 )
+
+
+#addmargins(table(mut_mate_onc$KRAS))
+
+
+mut_mate_top<-mut_mate_top%>%replace(is.na(.),0)
+
+#table(mut_mate_onc$NEWRACE,mut_mate_onc$KRAS)
+
+
+
+mut_mate_top_summ <- mut_mate_top%>%group_by(NEWRACE)%>%summarise(KRAS=sum(KRAS),
+                                                                  
+                                                                  APC=sum(APC),
+                                                                  TP53=sum(TP53),
+                                                                  
+                                                                  SMAD4=sum(SMAD4),
+                                                                  
+                                                                  PIK3CA=sum(PIK3CA),
+                                                                  SOX9=sum(SOX9),
+                                                                  TCF7L2=sum(TCF7L2),
+                                                                  KMT2D=sum(KMT2D),
+                                                                  ARID1A=sum(ARID1A),
+                                                                  FBXW7=sum(FBXW7),
+                                                                  
+                                                                  )
+
+summ_tidy_top<- pivot_longer(mut_mate_top_summ,cols = c(KRAS,APC,TP53,SMAD4,PIK3CA,SOX9,TCF7L2,KMT2D,ARID1A,FBXW7),names_to = "Gene",values_to = "count")
+  
+
+summ_tidy_top$total<-0
+summ_tidy_top$total[summ_tidy_top$NEWRACE=="Asian"]<-137
+summ_tidy_top$total[summ_tidy_top$NEWRACE=="Black"]<-128
+summ_tidy_top$total[summ_tidy_top$NEWRACE=="White Hispanic"]<-105
+summ_tidy_top$total[summ_tidy_top$NEWRACE=="White"]<-1382
+
+summ_tidy_top_onc<-summ_tidy_top%>%mutate(prop=round(count/total,digits=3)*100)
+
+
+##########################################################
+
+
+##################### top ten All ##################################
+
+
+
+all_top_maf <- combined_maf %>% filter(Hugo_Symbol%in%top_ten_genes)
+
+
+laml_top_all = read.maf(maf = all_top_maf,clinicalData = FINAL_CLINICAL)
+#oncoplot(maf = laml_full ,genes = fun_genes)
+
+
+
+
+# MAKE A MUTATION MATRIX
+mutation_matrix_top_all<- as.data.frame(mutCountMatrix(
+laml_top_all,
+includeSyn = FALSE,
+countOnly = NULL,
+removeNonMutated = FALSE
+))
+
+mutation_matrix_top_all_t <- data.frame(t(mutation_matrix_top_all))
+mutation_matrix_top_all_new <- tibble::rownames_to_column(mutation_matrix_top_all_t, "Tumor_Sample_Barcode")
+
+mutation_matrix_top_all_genest1 <- mutation_matrix_top_all_new%>%select(all_of(top_ten_genes),Tumor_Sample_Barcode)
+
+mut_mate_top_all <- full_join(mutation_matrix_top_all_genest1,FINAL_CLINICAL,by="Tumor_Sample_Barcode")
+
+##add in copy number for ERBB2
+
+top_ten_genes<- c("TP53","APC","KRAS","PIK3CA","FBXW7","SMAD4","TCF7L2","KMT2D","ARID1A","SOX9")
+
+mut_mate_top_all<-mut_mate_top_all%>% mutate(
+                                 KRAS=ifelse(KRAS==0,0,1),
+                                 
+                                 APC=ifelse(APC==0,0,1),
+                                 
+                                 SMAD4=ifelse(SMAD4==0,0,1),
+                                 PIK3CA=ifelse(PIK3CA==0,0,1),
+                                 
+                                 TP53=ifelse(TP53==0,0,1),
+                                 SOX9=ifelse(SOX9==0,0,1),
+                                 TCF7L2=ifelse(TCF7L2==0,0,1),
+                                 KMT2D=ifelse(KMT2D==0,0,1),
+                                 ARID1A=ifelse(ARID1A==0,0,1),
+                                 FBXW7=ifelse(FBXW7==0,0,1),
+                                 )
+
+
+#addmargins(table(mut_mate_onc$KRAS))
+
+
+mut_mate_top_all<-mut_mate_top_all%>%replace(is.na(.),0)
+
+#table(mut_mate_onc$NEWRACE,mut_mate_onc$KRAS)
+
+
+
+mut_mate_top_all_summ <- mut_mate_top_all%>%group_by(NEWRACE)%>%summarise(KRAS=sum(KRAS),
+                                                                  
+                                                                  APC=sum(APC),
+                                                                  TP53=sum(TP53),
+                                                                  
+                                                                  SMAD4=sum(SMAD4),
+                                                                  
+                                                                  PIK3CA=sum(PIK3CA),
+                                                                  SOX9=sum(SOX9),
+                                                                  TCF7L2=sum(TCF7L2),
+                                                                  KMT2D=sum(KMT2D),
+                                                                  ARID1A=sum(ARID1A),
+                                                                  FBXW7=sum(FBXW7),
+                                                                  
+                                                                  )
+
+summ_tidy_top_all<- pivot_longer(mut_mate_top_all_summ,cols = c(KRAS,APC,TP53,SMAD4,PIK3CA,SOX9,TCF7L2,KMT2D,ARID1A,FBXW7),names_to = "Gene",values_to = "count")
+  
+
+summ_tidy_top_all$total<-0
+summ_tidy_top_all$total[summ_tidy_top_all$NEWRACE=="Asian"]<-137
+summ_tidy_top_all$total[summ_tidy_top_all$NEWRACE=="Black"]<-128
+summ_tidy_top_all$total[summ_tidy_top_all$NEWRACE=="White Hispanic"]<-105
+summ_tidy_top_all$total[summ_tidy_top_all$NEWRACE=="White"]<-1382
+
+summ_tidy_top_all<-summ_tidy_top_all%>%mutate(prop=round(count/total,digits=3)*100)
+
+
+
+
+
+
+
+
+
+
+
+
+############################################################
+
+top_ten_genes<- c("TP53","APC","KRAS","PIK3CA","FBXW7","SMAD4","TCF7L2","KMT2D","ARID1A","SOX9")
+
+
+### MAKE GRAPH ###
+
+
+top_onc_join<-summ_tidy_top_onc%>%select(NEWRACE,Gene,prop)%>%mutate(gene_race=paste0(Gene,"_",NEWRACE))%>%rename(prop_onc=prop)
+top_all_join<-summ_tidy_top_all%>%select(NEWRACE,Gene,prop)%>%mutate(gene_race=paste0(Gene,"_",NEWRACE))%>%rename(prop_all=prop)
+
+
+sum_joined_top <- full_join(top_onc_join,top_all_join,by="gene_race")
+
+sum_joined_top<-sum_joined_top%>%mutate(prop_onc= ifelse(is.na(prop_onc),0,prop_onc))
+
+ggplot(summ_tidy_onc_2)+geom_bar(aes(x=NEWRACE,y=prop),stat='identity')+facet_wrap(~Gene, scales = "free_y",ncol = 2)
+
+sum_joined_top<-sum_joined_top%>%mutate(Gene.y=as.factor(Gene.y))
+#levels(sum_joined_top$Gene.y)<-c("TP53","APC","KRAS","PIK3CA","FBXW7","SMAD4","TCF7L2","KMT2D","ARID1A","SOX9")
+
+sum_joined_top$Gene.y<-factor(sum_joined_top$Gene.y,levels=c("TP53","APC","KRAS","PIK3CA","FBXW7","SMAD4","TCF7L2","KMT2D","ARID1A","SOX9"))
+
+ggplot(sum_joined_top)+geom_bar(aes(x=NEWRACE.y,y=prop_all),stat='identity')+geom_bar(aes(x=NEWRACE.y,y=prop_onc),stat = "identity",fill="#2171b5")+facet_wrap(~Gene.y,ncol = 2)+theme_test()+xlab("Race/Ethnicity") + 
+  scale_x_discrete(labels=c("Asian"="Non-Hispanic\nAsian","Black"="Non-Hispanic\nBlack","White"="Non-Hispanic\nWhite","White Hispanic"="White\nHispanic"))+ylab('Proportion of Patients with Mutation in Gene')
+
+ggsave(plot=last_plot(),filename="test2.png",height=8,width=8)
+
+
+
+
+
+```
+
+
+
+# Tempus GENE list
+```{r}
+tempusgenes<-'ABCB1 ABCC3 ABL1 ABL2 ABRAXAS1 ACTA2 ACVR1 (ALK2) ACVR1B AGO1 AJUBA AKT1 AKT2 AKT3 ALK AMER1 APC APLNR APOB AR ARAF ARHGAP26 ARHGAP35 ARID1A ARID1B ARID2 ARID5B ASNS ASPSCR1 ASXL1 ATIC ATM ATP7B ATR ATRX AURKA AURKB AXIN1 AXIN2 AXL B2M BAP1 BARD1 BCL10 BCL11B BCL2 BCL2L1 BCL2L11 BCL6 BCL7A BCLAF1 BCOR BCORL1 BCR BIRC3 BLM BMPR1A BRAF BRCA1 BRCA2 BRD4 BRIP1 BTG1 BTK BUB1B C11orf65 C3orf70 C8orf34 CALR CARD11 CARM1 CASP8 CASR CBFB CBL CBLB CBLC CBR3 CCDC6 CCND1 CCND2 CCND3 CCNE1 CD19 CD22 CD274 (PD-L1) CD40 CD70 CD79A CD79B CDC73 CDH1 CDK12 CDK4 CDK6 CDK8 CDKN1A CDKN1B CDKN1C CDKN2A  CDKN2B CDKN2C CEBPA CEP57 CFTR CHD2 CHD4 CHD7 CHEK1 CHEK2 CIC CIITA CKS1B CREBBP CRKL CRLF2 CSF1R CSF3R CTC1 CTCF CTLA4 CTNNA1 CTNNB1 CTRC CUL1 CUL3 CUL4A CUL4B CUX1 CXCR4 CYLD CYP1B1 CYP2D6 CYP3A5 CYSLTR2 DAXX DDB2 DDR2 DDX3X DICER1 DIRC2 DIS3 DIS3L2 DKC1 DNM2 DNMT3A DOT1L DPYD DYNC2H1 EBF1 ECT2L EGF EGFR EGLN1 EIF1AX ELF3 ELOC (TCEB1) EMSY ENG EP300 EPCAM EPHA2 EPHA7 EPHB1 EPHB2 EPOR ERBB2 (HER2) ERBB3 ERBB4 ERCC1 ERCC2 ERCC3 ERCC4 ERCC5 ERCC6 ERG ERRFI1 ESR1 ETS1 ETS2 ETV1 ETV4 ETV5 ETV6 EWSR1 EZH2 FAM46C FANCA FANCB FANCC FANCD2 FANCE FANCF FANCG FANCI FANCL FANCM FAS FAT1 FBXO11 FBXW7 FCGR2A FCGR3A FDPS FGF1 FGF10 FGF14 FGF2 FGF23 FGF3 FGF4 FGF5 FGF6 FGF7 FGF8 FGF9 FGFR1 FGFR2 FGFR3 FGFR4 FH FHIT FLCN FLT1 FLT3 FLT4 FNTB FOXA1 FOXL2 FOXO1 FOXO3 FOXP1 FOXQ1 FRS2 FUBP1 FUS G6PD GABRA6 GALNT12 GATA1 GATA2 GATA3 GATA4 GATA6 GEN1 GLI1 GLI2 GNA11 GNA13 GNAQ GNAS GPC3 GPS2 GREM1 GRIN2A GRM3 GSTP1 H19 H3F3A HAS3 HAVCR2 HDAC1 HDAC2 HDAC4 HGF HIF1A HIST1H1E HIST1H3B HIST1H4E HLA-A HLA-B HLA-C HLA-DMA HLA-DMB HLA-DOA HLA-DOB HLA-DPA1 HLA-DPB1 HLA-DPB2 HLA-DQA1 HLA-DQA2 HLA-DQB1 HLA-DQB2 HLA-DRA HLA-DRB1 HLA-DRB5 HLA-DRB6 HLA-E HLA-F HLA-G HNF1A HNF1B HOXA11 HOXB13 HRAS HSD11B2 HSD3B1 HSD3B2 HSP90AA1 HSPH1 IDH1 IDH2 IDO1 IFIT1 IFIT2 IFIT3 IFNAR1 IFNAR2 IFNGR1 IFNGR2 IFNL3 IKBKE IKZF1 IL10RA IL15 IL2RA IL6R IL7R ING1 INPP4B IRF1 IRF2 IRF4 IRS2 ITPKB JAK1 JAK2 JAK3 JUN KAT6A KDM5A KDM5C KDM5D KDM6A KDR KEAP1 KEL KIF1B KIT KLF4 KLHL6 KLLN KMT2A KMT2B KMT2C KMT2D KRAS L2HGDH LAG3 LATS1 LCK LDLR LEF1 LMNA LMO1 LRP1B LYN LZTR1 MAD2L2 MAF MAFB MAGI2 MALT1 MAP2K1 MAP2K2 MAP2K4 MAP3K1 MAP3K7 MAPK1 MAX MC1R MCL1 MDM2 MDM4 MED12 MEF2B MEN1 MET MGMT MIB1 MITF MKI67 MLH1 MLH3 MLLT3 MN1 MPL MRE11A MS4A1 MSH2 MSH3 MSH6 MTAP MTHFD2 MTHFR MTOR MTRR MUTYH MYB MYC MYCL MYCN MYD88 MYH11 NBN NCOR1 NCOR2 NF1 NF2 NFE2L2 NFKBIA NHP2 NKX2-1 NOP10 NOTCH1 NOTCH2 NOTCH3 NOTCH4 NPM1 NQO1 NRAS NRG1 NSD1 NSD2 NT5C2 NTHL1 NTRK1 NTRK2 NTRK3 NUDT15 NUP98 OLIG2 P2RY8 PAK1 PALB2 PALLD PAX3 PAX5 PAX7 PAX8 PBRM1 PCBP1 PDCD1 PDCD1LG2 PDGFRA PDGFRB PDK1 PHF6 PHGDH PHLPP1 PHLPP2 PHOX2B PIAS4 PIK3C2B PIK3CA PIK3CB PIK3CD PIK3CG PIK3R1 PIK3R2 PIM1 PLCG1 PLCG2 PML PMS1 PMS2 POLD1 POLE POLH POLQ POT1 POU2F2 PPARA PPARD PPARG PPM1D PPP1R15A PPP2R1A PPP2R2A PPP6C PRCC PRDM1 PREX2 PRKAR1A PRKDC PRKN PRSS1 PTCH1 PTCH2 PTEN PTPN11 PTPN13 PTPN22 PTPRD PTPRT QKI RAC1 RAD21 RAD50 RAD51 RAD51B RAD51C RAD51D RAD54L RAF1 RANBP2 RARA RASA1 RB1 RBM10 RECQL4 RET RHEB RHOA RICTOR RINT1 RIT1 RNF139 RNF43 ROS1 RPL5 RPS15 RPS6KB1 RPTOR RRM1 RSF1 RUNX1  RUNX1T1 RXRA SCG5 SDHA SDHAF2 SDHB  SDHC SDHD SEC23B SEMA3C SETBP1 SETD2 SF3B1 SGK1 SH2B3 SHH SLC26A3 SLC47A2 SLC9A3R1 SLIT2 SLX4 SMAD2 SMAD3 SMAD4 SMARCA1 SMARCA4 SMARCB1 SMARCE1 SMC1A SMC3 SMO SOCS1 SOD2 SOX10 SOX2 SOX9 SPEN SPINK1 SPOP SPRED1 SRC SRSF2 STAG2 STAT3 STAT4 STAT5A STAT5B STAT6 STK11 SUFU SUZ12 SYK SYNE1 TAF1 TANC1 TAP1 TAP2 TARBP2 TBC1D12 TBL1XR1 TBX3 TCF3 TCF7L2 TCL1A TERT TET2 TFE3 TFEB TFEC TGFBR1 TGFBR2 TIGIT TMEM127 TMEM173 TMPRSS2 TNF TNFAIP3 TNFRSF14 TNFRSF17 TNFRSF9 TOP1 TOP2A TP53 TP63 TPM1 TPMT TRAF3 TRAF7 TSC1 TSC2 TSHR TUSC3 TYMS U2AF1 UBE2T UGT1A1 UGT1A9 UMPS VEGFA VEGFB VHL VSIR WEE1 WNK1 WNK2 WRN WT1 XPA XPC XPO1 XRCC1 XRCC2 XRCC3 YEATS4 ZFHX3 ZMYM3 ZNF217 ZNF471 ZNF620 ZNF750 ZNRF3 ZRSR2'
+
+tempusgenelist<- as.data.frame(as.list(strsplit(tempusgenes,'\\s+'))[[1]])
+
+write.csv(tempusgenelist,"tempusgenes.csv")
+```
+
+
